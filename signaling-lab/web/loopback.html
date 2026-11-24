@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Loopback call</title>
+  <style>
+    video { width: 320px; background: #222; margin-right: 8px; }
+    pre { background: #f4f4f4; padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h3>Task 2.1: WebRTC loopback (Alice and Bob in one page)</h3>
+  <button id="start">Start call</button>
+  <button id="stats" disabled>Show selected candidate pair</button>
+  <div>
+    <video id="local" autoplay muted playsinline></video>
+    <video id="remote" autoplay playsinline></video>
+  </div>
+  <h4>Event log</h4>
+  <pre id="log"></pre>
+  <h4>Offer SDP (Alice → Bob)</h4>
+  <pre id="offer"></pre>
+  <h4>Answer SDP (Bob → Alice)</h4>
+  <pre id="answer"></pre>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const log = (t) => { $("log").textContent += t + "\n"; };
+
+    let alice, bob;
+
+    $("start").onclick = async () => {
+      $("start").disabled = true;
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      $("local").srcObject = stream;
+      log("got local stream: " + stream.getTracks().map(t => t.kind).join(", "));
+
+      alice = new RTCPeerConnection();
+      bob   = new RTCPeerConnection();
+
+      for (const [name, pc] of [["alice", alice], ["bob", bob]]) {
+        pc.oniceconnectionstatechange = () => log(name + " ICE state: " + pc.iceConnectionState);
+        pc.onconnectionstatechange    = () => log(name + " connection state: " + pc.connectionState);
+        pc.onsignalingstatechange     = () => log(name + " signaling state: " + pc.signalingState);
+        pc.onicegatheringstatechange  = () => log(name + " ICE gathering: " + pc.iceGatheringState);
+      }
+
+      alice.onicecandidate = (e) => {
+        if (e.candidate) { log("alice candidate: " + e.candidate.candidate); bob.addIceCandidate(e.candidate); }
+      };
+      bob.onicecandidate = (e) => {
+        if (e.candidate) { log("bob   candidate: " + e.candidate.candidate); alice.addIceCandidate(e.candidate); }
+      };
+
+      bob.ontrack = (e) => { log("bob got track: " + e.track.kind); $("remote").srcObject = e.streams[0]; };
+
+      stream.getTracks().forEach((t) => alice.addTrack(t, stream));
+
+      const offer = await alice.createOffer();
+      $("offer").textContent = offer.sdp;
+      await alice.setLocalDescription(offer);
+      await bob.setRemoteDescription(offer);
+
+      const answer = await bob.createAnswer();
+      $("answer").textContent = answer.sdp;
+      await bob.setLocalDescription(answer);
+      await alice.setRemoteDescription(answer);
+
+      $("stats").disabled = false;
+    };
+
+    $("stats").onclick = async () => {
+      const stats = await alice.getStats();
+      let pairId;
+      stats.forEach((r) => { if (r.type === "transport" && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId; });
+      const pair = stats.get(pairId);
+      if (!pair) { log("no selected pair yet"); return; }
+      const local  = stats.get(pair.localCandidateId);
+      const remote = stats.get(pair.remoteCandidateId);
+      log("SELECTED PAIR: local " + local.candidateType + " " + local.address + ":" + local.port +
+          "  <->  remote " + remote.candidateType + " " + remote.address + ":" + remote.port +
+          "  (state " + pair.state + ", rtt " + pair.currentRoundTripTime + ")");
+    };
+  </script>
+</body>
+</html>

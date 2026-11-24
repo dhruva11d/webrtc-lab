@@ -1,0 +1,25 @@
+# Values come from .env (EXTERNAL_IP, TURN_USER, TURN_PASS). Do not commit .env.
+services:
+  coturn:
+    image: coturn/coturn:latest
+    container_name: webrtc-lab-coturn
+    restart: "no"
+    ports:
+      - "${EXTERNAL_IP}:3478:3478/udp"
+      - "${EXTERNAL_IP}:3478:3478/tcp"
+      - "127.0.0.1:3478:3478/tcp"            # for `adb reverse tcp:3478`: the phone's TURN-over-TCP tunnel lands here
+      - "${EXTERNAL_IP}:49160-49200:49160-49200/udp"
+    command:
+      - "-n"                                  # no config file, use flags below
+      - "--log-file=stdout"
+      - "-v"                                  # verbose: shows allocations, so you can watch TURN work
+      - "--listening-port=3478"
+      - "--min-port=49160"                    # relay port range (must match the published range)
+      - "--max-port=49200"
+      - "--external-ip=${EXTERNAL_IP}"        # the address coturn tells clients to send relayed media to
+      - "--lt-cred-mech"                      # long-term credentials (username + password)
+      - "--user=${TURN_USER}:${TURN_PASS}"
+      - "--realm=webrtc-lab"
+      - "--fingerprint"
+      - "--no-tls"                            # plain TURN for the lab; production needs TLS (turns:). DTLS is off by default.
+      - "--no-cli"                            # disable the admin CLI port

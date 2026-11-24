@@ -1,0 +1,43 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SFU echo</title>
+<style>body{font-family:sans-serif;margin:16px}video{width:320px;background:#000;margin-right:8px}pre{background:#f4f4f4;padding:8px}</style>
+</head><body>
+<h3>Task 5.1: echo through a Go/Pion peer</h3>
+<button id="start">Start</button> <button id="stop">Stop</button>
+<div><video id="local" autoplay muted playsinline></video><video id="echo" autoplay playsinline></video></div>
+<p>Left: your camera. Right: the same video after a round trip through Go.</p>
+<pre id="stats">-</pre><pre id="log"></pre>
+<script>
+const log = m => { document.getElementById("log").textContent += new Date().toISOString().slice(11,23) + " " + m + "\n"; };
+let pc, timer;
+document.getElementById("stop").onclick = () => { if (timer) clearInterval(timer); if (pc) pc.close(); log("stopped"); };
+document.getElementById("start").onclick = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+  document.getElementById("local").srcObject = stream;
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onconnectionstatechange = () => log("connection: " + pc.connectionState);
+  pc.ontrack = e => { log("got echoed track"); document.getElementById("echo").srcObject = e.streams[0] || new MediaStream([e.track]); };
+  stream.getTracks().forEach(t => pc.addTrack(t, stream));
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise(r => { if (pc.iceGatheringState === "complete") r(); else pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && r(); });
+  const res = await fetch("/offer", { method: "POST", body: JSON.stringify(pc.localDescription) });
+  if (!res.ok) { log("offer failed: " + await res.text()); return; }
+  await pc.setRemoteDescription(await res.json());
+  log("answer applied");
+  let prev = {};
+  timer = setInterval(async () => {
+    const out = [];
+    (await pc.getStats()).forEach(s => {
+      if (s.type === "outbound-rtp" && s.kind === "video") {
+        const kbps = prev.o ? (s.bytesSent - prev.o) * 8 / 1000 : 0; prev.o = s.bytesSent;
+        out.push(`send: ${kbps.toFixed(0)} kbps ${s.frameWidth}x${s.frameHeight} nack=${s.nackCount} pli=${s.pliCount}`);
+      }
+      if (s.type === "inbound-rtp" && s.kind === "video") {
+        const kbps = prev.i ? (s.bytesReceived - prev.i) * 8 / 1000 : 0; prev.i = s.bytesReceived;
+        out.push(`echo recv: ${kbps.toFixed(0)} kbps ${s.frameWidth}x${s.frameHeight} lost=${s.packetsLost} jitter=${(s.jitter*1000).toFixed(1)}ms nack=${s.nackCount} pli=${s.pliCount}`);
+      }
+    });
+    document.getElementById("stats").textContent = out.join("\n") || "-";
+  }, 1000);
+};
+</script></body></html>

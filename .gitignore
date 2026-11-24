@@ -1,0 +1,15 @@
+# Documentation / study notes
+PROJECT_CONTEXT.md
+ROADMAP.md
+notes/
+*.txt
+4k packets.json
+
+# Secrets (TURN credentials, TLS key)
+.env
+turn-lab/ice-servers*.json
+turn-lab/phone-url.txt
+signaling-lab/certs/
+
+# Build output
+*.exe

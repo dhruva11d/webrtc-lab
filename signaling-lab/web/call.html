@@ -1,0 +1,243 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>1:1 call</title>
+  <style>
+    video { width: 320px; background: #222; margin-right: 8px; }
+    pre { background: #f4f4f4; padding: 8px; max-height: 300px; overflow: auto; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h3>Task 2.2: 1:1 call via the Go signaling server</h3>
+  <p>Open this page in two tabs, use the same room name, and click <b>Join</b> in each.</p>
+  <input id="room" value="room1">
+  <label><input type="checkbox" id="audio"> send audio (use headphones if both tabs are on one machine, or you will get feedback)</label>
+  <button id="join">Join</button>
+  <button id="stats" disabled>Show selected candidate pair</button>
+  <button id="dump" disabled>Dump SDP (local + remote)</button>
+  <div>
+    <div>ICE servers (JSON array; leave <code>[]</code> for none). Example STUN:
+      <code>[{"urls":"stun:stun.l.google.com:19302"}]</code></div>
+    <textarea id="ice" rows="3" cols="70">[]</textarea><br>
+    <label><input type="checkbox" id="relay"> force relay only (iceTransportPolicy = relay; needs a TURN server)</label>
+  </div>
+  <div>
+    <video id="local" autoplay muted playsinline></video>
+    <video id="remote" autoplay playsinline></video>
+  </div>
+  <h4>Live stats <button id="csv">Download stats CSV</button></h4>
+  <pre id="statsOut">(starts when the connection is up)</pre>
+  <pre id="log"></pre>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const log = (t) => { $("log").textContent += t + "\n"; };
+
+    // Note: a URL with credentials ends up in browser history, so only use lab credentials.
+    {
+      const qs = new URLSearchParams(location.search);
+      if (qs.get("room")) $("room").value = qs.get("room");
+      if (qs.get("relay") === "1") $("relay").checked = true;
+      if (qs.get("ice")) $("ice").value = qs.get("ice");
+    }
+
+    function getConfig() {
+      let iceServers = [];
+      try { iceServers = JSON.parse($("ice").value || "[]"); }
+      catch (err) { log("ICE servers JSON is invalid, using none: " + err); }
+      const cfg = { iceServers };
+      if ($("relay").checked) cfg.iceTransportPolicy = "relay";
+      log("ICE config: servers=[" + iceServers.map((s) => [].concat(s.urls).join(",")).join(" | ") +
+          "] policy=" + (cfg.iceTransportPolicy || "all"));
+      return cfg;
+    }
+
+    let ws, pc, localStream;
+    let pendingCandidates = [];
+
+    const send = (type, data) => ws.send(JSON.stringify({ type, data }));
+
+    function createPeerConnection() {
+      pc = new RTCPeerConnection(getConfig());
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          const extra = e.candidate.type === "relay"
+            ? "  [relayProtocol=" + e.candidate.relayProtocol + " url=" + e.candidate.url + "]" : "";
+          log("send candidate: " + e.candidate.candidate + extra);
+          send("candidate", e.candidate);
+        }
+      };
+      pc.ontrack = (e) => { log("got remote track: " + e.track.kind); $("remote").srcObject = e.streams[0]; };
+      pc.oniceconnectionstatechange = () => log("ICE state: " + pc.iceConnectionState);
+      pc.onconnectionstatechange    = () => {
+        log("connection state: " + pc.connectionState);
+        if (pc.connectionState === "connected") startStats();
+        else if (["failed", "closed", "disconnected"].includes(pc.connectionState)) stopStats();
+      };
+      pc.onsignalingstatechange     = () => log("signaling state: " + pc.signalingState);
+      pc.onicegatheringstatechange  = () => log("ICE gathering: " + pc.iceGatheringState);
+      pc.onicecandidateerror        = (e) => log("ICE candidate error: " + e.errorCode + " " + e.errorText + " " + (e.url || "") +
+                                                                 "  [from local interface " + (e.address || "?") + ":" + (e.port || "?") + "]");
+
+      log("adding local tracks: " + localStream.getTracks().map((t) => t.kind).join(", "));
+      localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+    }
+
+    async function flushCandidates() {
+      for (const c of pendingCandidates) {
+        try { await pc.addIceCandidate(c); }
+        catch (err) { log("addIceCandidate (buffered) FAILED: " + err); }
+      }
+      pendingCandidates = [];
+    }
+
+
+    const countSections = (sdp) => (sdp.match(/^m=/gm) || []).length;
+
+    async function makeOffer() {
+      createPeerConnection();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      log("send offer (m-sections: " + countSections(offer.sdp) + ")");
+      send("offer", pc.localDescription);
+    }
+
+    async function onOffer(offer) {
+      log("got offer (m-sections: " + countSections(offer.sdp) + ")");
+      createPeerConnection();
+      await pc.setRemoteDescription(offer);
+      await flushCandidates();
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      log("send answer");
+      send("answer", pc.localDescription);
+    }
+
+    async function onAnswer(answer) {
+      log("got answer");
+      await pc.setRemoteDescription(answer);
+      await flushCandidates();
+    }
+
+    async function onCandidate(c) {
+      log("recv candidate: " + (c && c.candidate));
+      if (pc && pc.remoteDescription) {
+        try { await pc.addIceCandidate(c); }
+        catch (err) { log("addIceCandidate FAILED: " + err); }
+      } else { log("BUFFERED early candidate (remote description not set yet)"); pendingCandidates.push(c); }
+    }
+
+    window.addEventListener("unhandledrejection", (e) => log("UNHANDLED ERROR: " + e.reason));
+
+    function hangup() {
+      stopStats();
+      if (pc) { pc.close(); pc = null; }
+      $("remote").srcObject = null;
+      $("stats").disabled = true;
+      $("dump").disabled = true;
+      pendingCandidates = [];
+    }
+
+    $("join").onclick = async () => {
+      $("join").disabled = true;
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: $("audio").checked });
+      $("local").srcObject = localStream;
+
+      // https page → must use wss (a secure page cannot open plain ws://)
+      const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+      ws = new WebSocket(scheme + location.host + "/ws");
+      ws.onopen = () => ws.send(JSON.stringify({ type: "join", room: $("room").value }));
+      ws.onclose = () => log("[ws closed]");
+
+      ws.onmessage = async (e) => {
+        const m = JSON.parse(e.data);
+        switch (m.type) {
+          case "joined":      log("joined room, peers now: " + m.data.peers); break;
+          case "peer-joined": log("peer joined → I create the offer"); await makeOffer(); $("stats").disabled = false; $("dump").disabled = false; break;
+          case "offer":       await onOffer(m.data); $("stats").disabled = false; $("dump").disabled = false; break;
+          case "answer":      await onAnswer(m.data); break;
+          case "candidate":   await onCandidate(m.data); break;
+          case "peer-left":   log("peer left"); hangup(); break;
+          case "error":       log("server error: " + m.data); break;
+        }
+      };
+    };
+
+    let statsTimer = null, prevStat = {}, statsRows = [];
+    const fmt = (v, d = 0) => (v == null || Number.isNaN(v)) ? "-" : v.toFixed(d);
+
+    function rate(key, ts, val) {
+      const p = prevStat[key]; prevStat[key] = { ts, val };
+      if (!p || ts <= p.ts || val == null) return null;
+      return (val - p.val) / ((ts - p.ts) / 1000);
+    }
+
+    async function pollStats() {
+      if (!pc) return;
+      const stats = await pc.getStats();
+      const t = Date.now(), lines = [];
+      let pair;
+      stats.forEach((r) => { if (r.type === "transport" && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
+      const rttMs = pair && pair.currentRoundTripTime != null ? pair.currentRoundTripTime * 1000 : null;
+      if (pair) lines.push("path      state=" + pair.state + "  rtt=" + fmt(rttMs, 1) + " ms  availableOutgoing=" + fmt(pair.availableOutgoingBitrate / 1000) + " kbps");
+
+      stats.forEach((r) => {
+        const kind = r.kind || r.mediaType;
+        if (r.type === "outbound-rtp") {
+          const bps = rate(r.id + "b", r.timestamp, r.bytesSent);
+          const kbps = bps == null ? null : bps * 8 / 1000;
+          lines.push("send " + kind + "  " + fmt(kbps) + " kbps  " + fmt(r.framesPerSecond) + " fps  " +
+            (r.frameWidth ? r.frameWidth + "x" + r.frameHeight : "-") + "  limit=" + (r.qualityLimitationReason ?? "-") +
+            "  nack=" + (r.nackCount ?? "-") + " pli=" + (r.pliCount ?? "-"));
+          statsRows.push([t, "send", kind, fmt(kbps, 1), fmt(r.framesPerSecond), r.frameWidth ?? "", r.frameHeight ?? "", "", "", fmt(rttMs, 1)]);
+        } else if (r.type === "inbound-rtp") {
+          const bps = rate(r.id + "b", r.timestamp, r.bytesReceived);
+          const kbps = bps == null ? null : bps * 8 / 1000;
+          const dRecv = rate(r.id + "p", r.timestamp, r.packetsReceived);
+          const dLost = rate(r.id + "l", r.timestamp, r.packetsLost);
+          const lossPct = (dRecv != null && dLost != null && dRecv + dLost > 0) ? 100 * dLost / (dRecv + dLost) : null;
+          const jitterMs = r.jitter != null ? r.jitter * 1000 : null;
+          lines.push("recv " + kind + "  " + fmt(kbps) + " kbps  " + fmt(r.framesPerSecond) + " fps  " +
+            (r.frameWidth ? r.frameWidth + "x" + r.frameHeight : "-") + "  loss/s=" + fmt(lossPct, 1) + "%  totalLost=" + (r.packetsLost ?? "-") +
+            "  jitter=" + fmt(jitterMs, 1) + " ms  freezes=" + (r.freezeCount ?? "-") + "  nack=" + (r.nackCount ?? "-") + " pli=" + (r.pliCount ?? "-") +
+            "  rtxRecv=" + (r.retransmittedPacketsReceived ?? "-") + " fecRecv=" + (r.fecPacketsReceived ?? "-") + " framesDropped=" + (r.framesDropped ?? "-"));
+          statsRows.push([t, "recv", kind, fmt(kbps, 1), fmt(r.framesPerSecond), r.frameWidth ?? "", r.frameHeight ?? "", fmt(lossPct, 2), fmt(jitterMs, 1), fmt(rttMs, 1)]);
+        } else if (r.type === "remote-inbound-rtp") {
+          lines.push("peer says " + kind + "  (from RTCP receiver report)  lost=" + (r.packetsLost ?? "-") +
+            "  fractionLost=" + fmt(r.fractionLost, 3) + "  jitter=" + fmt(r.jitter != null ? r.jitter * 1000 : null, 1) + " ms  rtt=" + fmt(r.roundTripTime != null ? r.roundTripTime * 1000 : null, 1) + " ms");
+        }
+      });
+      $("statsOut").textContent = lines.join("\n");
+    }
+
+    function startStats() { stopStats(); prevStat = {}; statsTimer = setInterval(pollStats, 1000); }
+    function stopStats() { if (statsTimer) { clearInterval(statsTimer); statsTimer = null; } }
+
+    $("csv").onclick = () => {
+      const head = "time_ms,dir,kind,kbps,fps,width,height,loss_pct,jitter_ms,rtt_ms\n";
+      const blob = new Blob([head + statsRows.map((r) => r.join(",")).join("\n")], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = "webrtc-stats.csv"; a.click();
+    };
+
+    $("dump").onclick = () => {
+      if (!pc || !pc.localDescription || !pc.remoteDescription) { log("no SDP yet"); return; }
+      log("===== LOCAL SDP (" + pc.localDescription.type + ") =====\n" + pc.localDescription.sdp);
+      log("===== REMOTE SDP (" + pc.remoteDescription.type + ") =====\n" + pc.remoteDescription.sdp);
+    };
+
+    $("stats").onclick = async () => {
+      const stats = await pc.getStats();
+      let pairId;
+      stats.forEach((r) => { if (r.type === "transport" && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId; });
+      const pair = stats.get(pairId);
+      if (!pair) { log("no selected pair yet"); return; }
+      const l = stats.get(pair.localCandidateId), r = stats.get(pair.remoteCandidateId);
+      log("SELECTED PAIR: local " + l.candidateType + " " + l.address + ":" + l.port +
+          " <-> remote " + r.candidateType + " " + r.address + ":" + r.port + " (rtt " + pair.currentRoundTripTime + ")");
+    };
+  </script>
+</body>
+</html>
