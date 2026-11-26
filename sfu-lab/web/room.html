@@ -1,0 +1,78 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SFU room</title>
+<style>body{font-family:sans-serif;margin:16px}.tile{display:inline-block;margin:4px}video{width:280px;background:#000;display:block}pre{background:#f4f4f4;padding:8px}</style>
+</head><body>
+<h3>Task 5.4: group call through the SFU</h3>
+<button id="join">Join room</button> <button id="leave">Leave</button>
+<div id="tiles"></div>
+<pre id="stats">-</pre><pre id="log"></pre>
+<script>
+const log = m => { document.getElementById("log").textContent += new Date().toISOString().slice(11,23) + " " + m + "\n"; };
+let ws, pc, cam, myId, timer;
+
+function tile(id, label) {
+  let t = document.getElementById("t-" + id);
+  if (!t) {
+    t = document.createElement("div"); t.className = "tile"; t.id = "t-" + id;
+    t.innerHTML = `<video autoplay playsinline></video><small>${label}</small>`;
+    document.getElementById("tiles").appendChild(t);
+  }
+  return t.querySelector("video");
+}
+
+let joined = false;
+document.getElementById("join").onclick = async () => {
+  if (joined) { log("already joined, press Leave first"); return; }
+  joined = true;
+  cam =await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360 } });
+  tile("me", "me (muted)").srcObject = cam; tile("me").muted = true;
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onconnectionstatechange = () => log("connection: " + pc.connectionState);
+  pc.ontrack = e => {
+    const stream = e.streams[0];
+    log("got track from " + stream.id);
+    tile(stream.id, "peer " + stream.id).srcObject = stream;
+    stream.onremovetrack = () => { log(stream.id + " track removed"); const t = document.getElementById("t-" + stream.id); if (t) t.remove(); };
+  };
+  ws = new WebSocket("ws://" + location.host + "/ws");
+  ws.onmessage = async ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "welcome") { myId = m.id; log("my id " + myId); }
+    if (m.type === "peer-left") { log("peer left " + m.id); const t = document.getElementById("t-" + m.id); if (t) t.remove(); }
+    if (m.type === "offer") {
+      await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
+      const first = pc.getTransceivers().find(t => t.mid === "0");
+      if (first && !first.sender.track) { await first.sender.replaceTrack(cam.getVideoTracks()[0]); first.direction = "sendrecv"; }
+      await pc.setLocalDescription(await pc.createAnswer());
+      await new Promise(r => { if (pc.iceGatheringState === "complete") r(); else pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && r(); });
+      ws.send(JSON.stringify({ type: "answer", sdp: pc.localDescription.sdp }));
+      log("answered (m-sections: " + pc.getTransceivers().length + ")");
+    }
+  };
+  let prev = {};
+  timer = setInterval(async () => {
+    const out = [];
+    (await pc.getStats()).forEach(s => {
+      if (s.type === "outbound-rtp" && s.kind === "video") {
+        const kbps = prev.o ? (s.bytesSent - prev.o) * 8 / 1000 : 0; prev.o = s.bytesSent;
+        out.push(`send: ${kbps.toFixed(0)} kbps pli=${s.pliCount}`);
+      }
+      if (s.type === "inbound-rtp" && s.kind === "video") {
+        const k = s.ssrc, kbps = prev[k] ? (s.bytesReceived - prev[k]) * 8 / 1000 : 0; prev[k] = s.bytesReceived;
+        out.push(`recv ssrc=${k}: ${kbps.toFixed(0)} kbps ${s.frameWidth}x${s.frameHeight} lost=${s.packetsLost} freezes=${s.freezeCount}`);
+      }
+    });
+    document.getElementById("stats").textContent = out.join("\n") || "-";
+  }, 1000);
+};
+document.getElementById("leave").onclick = () => {
+  clearInterval(timer);
+  if (ws) ws.close();
+  if (pc) pc.close();
+  if (cam) cam.getTracks().forEach(t => t.stop());
+  document.getElementById("tiles").innerHTML = "";
+  ws = pc = cam = null;
+  joined = false;
+  log("left");
+};
+</script></body></html>

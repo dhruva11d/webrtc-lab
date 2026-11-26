@@ -1,0 +1,49 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SFU</title>
+<style>body{font-family:sans-serif;margin:16px}video{width:320px;background:#000}pre{background:#f4f4f4;padding:8px}</style>
+</head><body>
+<h3>Task 5.2: one publisher, many subscribers</h3>
+<p>Tab 1: <b>Publish</b>. Other tabs: <b>Subscribe</b>.</p>
+<button id="pub">Publish camera</button> <button id="sub">Subscribe</button> <button id="stop">Stop</button>
+<div><video id="v" autoplay muted playsinline></video></div>
+<pre id="stats">-</pre><pre id="log"></pre>
+<script>
+const log = m => { document.getElementById("log").textContent += new Date().toISOString().slice(11,23) + " " + m + "\n"; };
+let pc, timer;
+async function connect(path, setup) {
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onconnectionstatechange = () => log("connection: " + pc.connectionState);
+  await setup(pc);
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise(r => { if (pc.iceGatheringState === "complete") r(); else pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && r(); });
+  const res = await fetch(path, { method: "POST", body: JSON.stringify(pc.localDescription) });
+  if (!res.ok) { log(path + " failed: " + await res.text()); return false; }
+  await pc.setRemoteDescription(await res.json());
+  log("answer applied");
+  let prev = 0;
+  timer = setInterval(async () => {
+    const out = [];
+    (await pc.getStats()).forEach(s => {
+      if ((s.type === "outbound-rtp" || s.type === "inbound-rtp") && s.kind === "video") {
+        const bytes = s.bytesSent ?? s.bytesReceived;
+        const kbps = prev ? (bytes - prev) * 8 / 1000 : 0; prev = bytes;
+        out.push(`${s.type}: ${kbps.toFixed(0)} kbps ${s.frameWidth}x${s.frameHeight} fps=${s.framesPerSecond ?? "-"} lost=${s.packetsLost ?? "-"} nack=${s.nackCount} pli=${s.pliCount} freezes=${s.freezeCount ?? "-"}`);
+      }
+    });
+    document.getElementById("stats").textContent = out.join("\n") || "-";
+  }, 1000);
+  return true;
+}
+document.getElementById("pub").onclick = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+  document.getElementById("v").srcObject = stream;
+  await connect("/publish", async p => stream.getTracks().forEach(t => p.addTrack(t, stream)));
+};
+document.getElementById("sub").onclick = async () => {
+  await connect("/subscribe", async p => {
+    p.addTransceiver("video", { direction: "recvonly" });
+    p.ontrack = e => { log("got track"); document.getElementById("v").srcObject = e.streams[0] || new MediaStream([e.track]); };
+  });
+};
+document.getElementById("stop").onclick = () => { clearInterval(timer); if (pc) pc.close(); log("stopped"); };
+</script></body></html>

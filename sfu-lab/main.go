@@ -13,6 +13,8 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+// used to define the MediaEngine instance and assign the interceptors that will be used in the RTP amd RTCP
+// and use the webrtc.NewAPI to use the available media engine capabilities as well as the interceptors
 func newAPI() *webrtc.API {
 	m := &webrtc.MediaEngine{}
 	if err := m.RegisterDefaultCodecs(); err != nil {
@@ -174,8 +176,16 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8090", "HTTP address (page + /offer)")
 	flag.Parse()
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir("web")))
-	mux.HandleFunc("/offer", offerHandler(newAPI()))
+	files := http.FileServer(http.Dir("web"))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		files.ServeHTTP(w, r)
+	}))
+	api := newAPI()
+	mux.HandleFunc("/offer", offerHandler(api))
+	mux.HandleFunc("/publish", publishHandler(api))
+	mux.HandleFunc("/subscribe", subscribeHandler(api))
+	mux.HandleFunc("/ws", wsHandler(api))
 	log.Printf("sfu-lab echo: open http://%s/echo.html", *addr)
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
