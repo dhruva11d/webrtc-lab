@@ -60,7 +60,11 @@ func wsHandler(hub *Hub) http.HandlerFunc {
 func newMux(hub *Hub) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", wsHandler(hub))
-	mux.Handle("/", http.FileServer(http.Dir("web")))
+	files := http.FileServer(http.Dir("web"))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		files.ServeHTTP(w, r)
+	}))
 	return mux
 }
 

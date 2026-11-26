@@ -3,6 +3,7 @@ module sfu-lab
 go 1.25.8
 
 require (
+	github.com/gorilla/websocket v1.5.3
 	github.com/pion/interceptor v0.1.51
 	github.com/pion/rtcp v1.2.20
 	github.com/pion/rtp v1.10.6
@@ -11,7 +12,6 @@ require (
 
 require (
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/pion/datachannel v1.6.4 // indirect
 	github.com/pion/dtls/v3 v3.1.16 // indirect
 	github.com/pion/ice/v4 v4.4.9 // indirect

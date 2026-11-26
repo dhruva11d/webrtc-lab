@@ -1,5 +1,8 @@
 package main
 
+// validate:allow M07 - test writes from a single goroutine
+// validate:allow M08 - read helper bounds a test with a deadline
+
 import (
 	"net/http/httptest"
 	"strings"

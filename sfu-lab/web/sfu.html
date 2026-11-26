@@ -35,15 +35,17 @@ async function connect(path, setup) {
   return true;
 }
 document.getElementById("pub").onclick = async () => {
+  if (pc) { log("already connected, press Stop first"); return; }
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
   document.getElementById("v").srcObject = stream;
   await connect("/publish", async p => stream.getTracks().forEach(t => p.addTrack(t, stream)));
 };
 document.getElementById("sub").onclick = async () => {
+  if (pc) { log("already connected, press Stop first"); return; }
   await connect("/subscribe", async p => {
     p.addTransceiver("video", { direction: "recvonly" });
     p.ontrack = e => { log("got track"); document.getElementById("v").srcObject = e.streams[0] || new MediaStream([e.track]); };
   });
 };
-document.getElementById("stop").onclick = () => { clearInterval(timer); if (pc) pc.close(); log("stopped"); };
+document.getElementById("stop").onclick = () => { clearInterval(timer); if (pc) pc.close(); pc = null; log("stopped"); };
 </script></body></html>

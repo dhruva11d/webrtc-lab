@@ -10,8 +10,9 @@
 <script>
 const log = m => { document.getElementById("log").textContent += new Date().toISOString().slice(11,23) + " " + m + "\n"; };
 let pc, timer;
-document.getElementById("stop").onclick = () => { if (timer) clearInterval(timer); if (pc) pc.close(); log("stopped"); };
+document.getElementById("stop").onclick = () => { if (timer) clearInterval(timer); if (pc) pc.close(); pc = null; log("stopped"); };
 document.getElementById("start").onclick = async () => {
+  if (pc) { log("already started, press Stop first"); return; }
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
   document.getElementById("local").srcObject = stream;
   pc = new RTCPeerConnection({ iceServers: [] });
