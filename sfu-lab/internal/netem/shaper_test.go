@@ -1,4 +1,4 @@
-package main
+package netem
 
 import (
 	"net"
@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func pair(t *testing.T) (*shapedConn, net.PacketConn) {
+func pair(t *testing.T) (*ShapedConn, net.PacketConn) {
 	t.Helper()
 	rx, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
@@ -16,7 +16,7 @@ func pair(t *testing.T) (*shapedConn, net.PacketConn) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := newShapedConn(tx)
+	s := NewShapedConn(tx)
 	t.Cleanup(func() { s.Close(); rx.Close() })
 	return s, rx
 }
@@ -35,21 +35,21 @@ func count(rx net.PacketConn, wait time.Duration) int {
 
 func TestTotalLossDeliversNothing(t *testing.T) {
 	s, rx := pair(t)
-	s.set(100, 0)
+	s.Set(100, 0)
 	for i := 0; i < 20; i++ {
 		s.WriteTo(make([]byte, 100), rx.LocalAddr())
 	}
 	if got := count(rx, 200*time.Millisecond); got != 0 {
 		t.Fatalf("want 0 delivered, got %d", got)
 	}
-	if s.dropped.Load() != 20 {
-		t.Fatalf("want 20 dropped, got %d", s.dropped.Load())
+	if s.Dropped() != 20 {
+		t.Fatalf("want 20 dropped, got %d", s.Dropped())
 	}
 }
 
 func TestRateCapDelaysAndTailDrops(t *testing.T) {
 	s, rx := pair(t)
-	s.set(0, 800)
+	s.Set(0, 800)
 	for i := 0; i < 100; i++ {
 		s.WriteTo(make([]byte, 1000), rx.LocalAddr())
 	}
@@ -57,7 +57,7 @@ func TestRateCapDelaysAndTailDrops(t *testing.T) {
 	if got < 15 || got > 40 {
 		t.Fatalf("800 kbps with a 200 ms queue should pass about 20 packets of 1000 bytes, got %d", got)
 	}
-	if s.dropped.Load() == 0 {
+	if s.Dropped() == 0 {
 		t.Fatal("expected tail drops")
 	}
 }

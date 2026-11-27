@@ -1,22 +1,8 @@
-package main
+package adapt
 
 import "time"
 
-var layerOrder = []string{"q", "h", "f"}
-
-const (
-	lossDownPct  = 5.0
-	lossUpPct    = 1.0
-	downNeeded   = 2
-	upNeeded     = 8
-	minHold      = 2 * time.Second
-	baseUpWait   = 10 * time.Second
-	maxUpWait    = 60 * time.Second
-	failedProbe  = 15 * time.Second
-	stableToBase = 30 * time.Second
-)
-
-type adapter struct {
+type LossAdapter struct {
 	idx        int
 	bad, good  int
 	lastChange time.Time
@@ -24,8 +10,8 @@ type adapter struct {
 	upWait     time.Duration
 }
 
-func newAdapter(layer string) *adapter {
-	a := &adapter{idx: 1, upWait: baseUpWait}
+func NewLossAdapter(layer string) *LossAdapter {
+	a := &LossAdapter{idx: 1, upWait: baseUpWait}
 	for i, l := range layerOrder {
 		if l == layer {
 			a.idx = i
@@ -34,12 +20,12 @@ func newAdapter(layer string) *adapter {
 	return a
 }
 
-func (a *adapter) observe(lossPct float64, now time.Time) (string, bool) {
+func (a *LossAdapter) Observe(lossPct float64, now time.Time) (string, bool) {
 	switch {
 	case lossPct >= lossDownPct:
 		a.bad++
 		a.good = 0
-	case lossPct < lossUpPct:
+	case lossPct < LossUpPct:
 		a.good++
 		a.bad = 0
 		if !a.lastUp.IsZero() && now.Sub(a.lastUp) > stableToBase {

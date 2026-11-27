@@ -1,4 +1,4 @@
-package main
+package simulcast
 
 import (
 	"encoding/json"
@@ -8,11 +8,14 @@ import (
 
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
+
+	"sfu-lab/internal/sdp"
+	"sfu-lab/internal/vp8"
 )
 
-func simulcastPublishHandler(api *webrtc.API) http.HandlerFunc {
+func PublishHandler(api *webrtc.API) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		offer, ok := decodeOffer(w, r)
+		offer, ok := sdp.DecodeOffer(w, r)
 		if !ok {
 			return
 		}
@@ -55,7 +58,7 @@ func simulcastPublishHandler(api *webrtc.API) http.HandlerFunc {
 				}
 				n++
 				bytes += uint64(len(pkt.Payload))
-				if isVP8Keyframe(pkt.Payload) {
+				if vp8.IsKeyframe(pkt.Payload) {
 					keyframes++
 				}
 				if !first {
@@ -77,7 +80,7 @@ func simulcastPublishHandler(api *webrtc.API) http.HandlerFunc {
 			}
 		})
 
-		answer, err := negotiate(pc, offer)
+		answer, err := sdp.Negotiate(pc, offer)
 		if err != nil {
 			pc.Close()
 			http.Error(w, err.Error(), http.StatusBadRequest)

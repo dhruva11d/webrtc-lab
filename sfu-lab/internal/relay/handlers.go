@@ -1,114 +1,21 @@
-package main
+package relay
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+
+	"sfu-lab/internal/sdp"
 )
 
-type publisher struct {
-	pc   *webrtc.PeerConnection
-	ssrc atomic.Uint32
-}
-
-type stream struct {
-	mu    sync.Mutex
-	track *webrtc.TrackLocalStaticRTP
-	rw    rewriter
-}
-
-var shared stream
-
-func (s *stream) get(codec webrtc.RTPCodecCapability) (*webrtc.TrackLocalStaticRTP, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.track == nil {
-		t, err := webrtc.NewTrackLocalStaticRTP(codec, "video", "sfu")
-		if err != nil {
-			return nil, err
-		}
-		s.track = t
-	} else if s.track.Codec().MimeType != codec.MimeType {
-		return nil, fmt.Errorf("stream is %s, new publisher sent %s", s.track.Codec().MimeType, codec.MimeType)
-	}
-	s.rw.beginSource()
-	return s.track, nil
-}
-
-func (s *stream) current() *webrtc.TrackLocalStaticRTP {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.track
-}
-
-func (s *stream) write(p *rtp.Packet) error {
-	s.mu.Lock()
-	s.rw.rewrite(p, time.Now())
-	t := s.track
-	s.mu.Unlock()
-	return t.WriteRTP(p)
-}
-
-func requestKeyframe() {
-	if p := getPublisher(); p != nil {
-		p.requestKeyframe()
-	}
-}
-
-func (p *publisher) requestKeyframe() {
-	if ssrc := p.ssrc.Load(); ssrc != 0 {
-		p.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}})
-	}
-}
-
-var (
-	pubMu   sync.Mutex
-	current *publisher
-	subs    atomic.Int32
-)
-
-func getPublisher() *publisher {
-	pubMu.Lock()
-	defer pubMu.Unlock()
-	return current
-}
-
-func negotiate(pc *webrtc.PeerConnection, offer webrtc.SessionDescription) (*webrtc.SessionDescription, error) {
-	if err := pc.SetRemoteDescription(offer); err != nil {
-		return nil, err
-	}
-	answer, err := pc.CreateAnswer(nil)
-	if err != nil {
-		return nil, err
-	}
-	gathered := webrtc.GatheringCompletePromise(pc)
-	if err := pc.SetLocalDescription(answer); err != nil {
-		return nil, err
-	}
-	<-gathered
-	return pc.LocalDescription(), nil
-}
-
-func decodeOffer(w http.ResponseWriter, r *http.Request) (webrtc.SessionDescription, bool) {
-	var offer webrtc.SessionDescription
-	if err := json.NewDecoder(r.Body).Decode(&offer); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return offer, false
-	}
-	return offer, true
-}
-
-func publishHandler(api *webrtc.API) http.HandlerFunc {
+func PublishHandler(api *webrtc.API) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		offer, ok := decodeOffer(w, r)
+		offer, ok := sdp.DecodeOffer(w, r)
 		if !ok {
 			return
 		}
@@ -169,7 +76,7 @@ func publishHandler(api *webrtc.API) http.HandlerFunc {
 			}
 		})
 
-		answer, err := negotiate(pc, offer)
+		answer, err := sdp.Negotiate(pc, offer)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -179,14 +86,14 @@ func publishHandler(api *webrtc.API) http.HandlerFunc {
 	}
 }
 
-func subscribeHandler(api *webrtc.API) http.HandlerFunc {
+func SubscribeHandler(api *webrtc.API) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		track := shared.current()
 		if track == nil {
 			http.Error(w, "no publisher has ever connected", http.StatusConflict)
 			return
 		}
-		offer, ok := decodeOffer(w, r)
+		offer, ok := sdp.DecodeOffer(w, r)
 		if !ok {
 			return
 		}
@@ -237,7 +144,7 @@ func subscribeHandler(api *webrtc.API) http.HandlerFunc {
 			}
 		}()
 
-		answer, err := negotiate(pc, offer)
+		answer, err := sdp.Negotiate(pc, offer)
 		if err != nil {
 			pc.Close()
 			http.Error(w, err.Error(), http.StatusBadRequest)

@@ -1,4 +1,4 @@
-package main
+package netem
 
 import (
 	"math/rand"
@@ -19,7 +19,7 @@ type shapedPacket struct {
 	at   time.Time
 }
 
-type shapedConn struct {
+type ShapedConn struct {
 	net.PacketConn
 	mu       sync.Mutex
 	lossPct  float64
@@ -31,25 +31,27 @@ type shapedConn struct {
 	dropped  atomic.Uint64
 }
 
-func newShapedConn(c net.PacketConn) *shapedConn {
-	s := &shapedConn{PacketConn: c, queue: make(chan shapedPacket, shaperBacklog), done: make(chan struct{})}
+func NewShapedConn(c net.PacketConn) *ShapedConn {
+	s := &ShapedConn{PacketConn: c, queue: make(chan shapedPacket, shaperBacklog), done: make(chan struct{})}
 	go s.run()
 	return s
 }
 
-func (s *shapedConn) set(lossPct, rateKbps float64) {
+func (s *ShapedConn) Set(lossPct, rateKbps float64) {
 	s.mu.Lock()
 	s.lossPct, s.rateKbps = lossPct, rateKbps
 	s.mu.Unlock()
 }
 
-func (s *shapedConn) get() (lossPct, rateKbps float64) {
+func (s *ShapedConn) Get() (lossPct, rateKbps float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lossPct, s.rateKbps
 }
 
-func (s *shapedConn) admit(size int, now time.Time) (time.Time, bool) {
+func (s *ShapedConn) Dropped() uint64 { return s.dropped.Load() }
+
+func (s *ShapedConn) admit(size int, now time.Time) (time.Time, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.lossPct > 0 && rand.Float64()*100 < s.lossPct {
@@ -69,12 +71,13 @@ func (s *shapedConn) admit(size int, now time.Time) (time.Time, bool) {
 	return dep, true
 }
 
-func (s *shapedConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+func (s *ShapedConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	dep, ok := s.admit(len(p), time.Now())
 	if !ok {
 		s.dropped.Add(1)
 		return len(p), nil
 	}
+
 	pk := shapedPacket{data: append([]byte(nil), p...), addr: addr, at: dep}
 	select {
 	case s.queue <- pk:
@@ -84,7 +87,7 @@ func (s *shapedConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	return len(p), nil
 }
 
-func (s *shapedConn) run() {
+func (s *ShapedConn) run() {
 	for {
 		select {
 		case <-s.done:
@@ -98,7 +101,7 @@ func (s *shapedConn) run() {
 	}
 }
 
-func (s *shapedConn) Close() error {
+func (s *ShapedConn) Close() error {
 	s.once.Do(func() { close(s.done) })
 	return s.PacketConn.Close()
 }

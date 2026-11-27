@@ -1,4 +1,4 @@
-package main
+package room
 
 import (
 	"crypto/rand"
@@ -211,7 +211,7 @@ func (r *room) remove(p *roomPeer) {
 	log.Printf("[%s] left; peers now %d", p.id, len(r.others("")))
 }
 
-func wsHandler(api *webrtc.API) http.HandlerFunc {
+func WSHandler(api *webrtc.API) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ws, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {

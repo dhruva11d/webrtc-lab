@@ -1,4 +1,4 @@
-package main
+package rtprewrite
 
 import (
 	"time"
@@ -8,7 +8,7 @@ import (
 
 const videoClockRate = 90000
 
-type rewriter struct {
+type Rewriter struct {
 	started bool
 	fresh   bool
 	lastSeq uint16
@@ -18,9 +18,9 @@ type rewriter struct {
 	tsOff   uint32
 }
 
-func (r *rewriter) beginSource() { r.fresh = true }
+func (r *Rewriter) BeginSource() { r.fresh = true }
 
-func (r *rewriter) rewrite(p *rtp.Packet, now time.Time) {
+func (r *Rewriter) Rewrite(p *rtp.Packet, now time.Time) {
 	if r.fresh {
 		if r.started {
 			r.seqOff = r.lastSeq + 1 - p.SequenceNumber

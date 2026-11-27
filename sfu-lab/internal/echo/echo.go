@@ -1,33 +1,17 @@
-package main
+package echo
 
 import (
 	"encoding/json"
-	"flag"
 	"log"
 	"net/http"
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
-// used to define the MediaEngine instance and assign the interceptors that will be used in the RTP amd RTCP
-// and use the webrtc.NewAPI to use the available media engine capabilities as well as the interceptors
-func newAPI() *webrtc.API {
-	m := &webrtc.MediaEngine{}
-	if err := m.RegisterDefaultCodecs(); err != nil {
-		log.Fatal(err)
-	}
-	ir := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
-		log.Fatal(err)
-	}
-	return webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir))
-}
-
-func offerHandler(api *webrtc.API) http.HandlerFunc {
+func OfferHandler(api *webrtc.API) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var offer webrtc.SessionDescription
 		if err := json.NewDecoder(r.Body).Decode(&offer); err != nil {
@@ -170,28 +154,4 @@ func offerHandler(api *webrtc.API) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(pc.LocalDescription())
 	}
-}
-
-func main() {
-	addr := flag.String("addr", "127.0.0.1:8090", "HTTP address (page + /offer)")
-	flag.Parse()
-	mux := http.NewServeMux()
-	files := http.FileServer(http.Dir("web"))
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		files.ServeHTTP(w, r)
-	}))
-	api := newAPI()
-	mux.HandleFunc("/offer", offerHandler(api))
-	mux.HandleFunc("/publish", publishHandler(api))
-	mux.HandleFunc("/subscribe", subscribeHandler(api))
-	mux.HandleFunc("/ws", wsHandler(api))
-	mux.HandleFunc("/simulcast", simulcastPublishHandler(api))
-	mux.HandleFunc("/simulcast-sub", simSubscribeHandler())
-	mux.HandleFunc("/simulcast-select", simSelectHandler)
-	mux.HandleFunc("/simulcast-impair", simImpairHandler)
-	mux.HandleFunc("/simulcast-sub-stats", simStatsHandler())
-	mux.HandleFunc("/simulcast-sub-series", simSeriesHandler)
-	log.Printf("sfu-lab echo: open http://%s/echo.html", *addr)
-	log.Fatal(http.ListenAndServe(*addr, mux))
 }

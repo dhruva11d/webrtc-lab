@@ -1,10 +1,13 @@
-package main
+package simulcast
 
 import (
 	"sync"
 	"time"
 
 	"github.com/pion/rtp"
+
+	"sfu-lab/internal/rtprewrite"
+	"sfu-lab/internal/vp8"
 )
 
 type selector struct {
@@ -13,7 +16,7 @@ type selector struct {
 	target      string
 	waitingFrom time.Time
 	lastAsk     time.Time
-	rw          rewriter
+	rw          rtprewrite.Rewriter
 	write       func(*rtp.Packet) error
 	askKeyframe func(rid string)
 	onSwitch    func(from, to string, waited time.Duration)
@@ -63,7 +66,7 @@ func (s *selector) handle(rid string, pkt *rtp.Packet) {
 	now := time.Now()
 
 	if rid == s.target && rid != s.current {
-		if !isVP8Keyframe(pkt.Payload) {
+		if !vp8.IsKeyframe(pkt.Payload) {
 			if now.Sub(s.lastAsk) > 500*time.Millisecond {
 				s.lastAsk = now
 				if s.askKeyframe != nil {
@@ -74,7 +77,7 @@ func (s *selector) handle(rid string, pkt *rtp.Packet) {
 		}
 		from := s.current
 		s.current = rid
-		s.rw.beginSource()
+		s.rw.BeginSource()
 		if s.onSwitch != nil {
 			s.onSwitch(from, rid, now.Sub(s.waitingFrom))
 		}
@@ -83,7 +86,7 @@ func (s *selector) handle(rid string, pkt *rtp.Packet) {
 		return
 	}
 	out := pkt.Clone()
-	s.rw.rewrite(out, now)
+	s.rw.Rewrite(out, now)
 	s.fwdBytes += uint64(len(out.Payload) + 12)
 	s.write(out)
 }

@@ -1,4 +1,4 @@
-package main
+package vp8
 
 import "testing"
 
@@ -16,7 +16,7 @@ func TestVP8Keyframe(t *testing.T) {
 		{"descriptor only", []byte{0x10}, false},
 	}
 	for _, c := range cases {
-		if got := isVP8Keyframe(c.payload); got != c.want {
+		if got := IsKeyframe(c.payload); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}

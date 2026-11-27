@@ -1,4 +1,4 @@
-package main
+package adapt
 
 import "time"
 
@@ -11,7 +11,7 @@ const (
 	bweLayerMargin = 1.0
 )
 
-type bweAdapter struct {
+type BWEAdapter struct {
 	idx        int
 	low, high  int
 	lastChange time.Time
@@ -19,8 +19,8 @@ type bweAdapter struct {
 	upWait     time.Duration
 }
 
-func newBWEAdapter(layer string) *bweAdapter {
-	a := &bweAdapter{idx: 1, upWait: baseUpWait}
+func NewBWEAdapter(layer string) *BWEAdapter {
+	a := &BWEAdapter{idx: 1, upWait: baseUpWait}
 	for i, l := range layerOrder {
 		if l == layer {
 			a.idx = i
@@ -39,7 +39,7 @@ func fittingLayer(estKbps float64) int {
 	return best
 }
 
-func (a *bweAdapter) observe(estKbps float64, now time.Time) (string, bool) {
+func (a *BWEAdapter) Observe(estKbps float64, now time.Time) (string, bool) {
 	fit := fittingLayer(estKbps)
 	switch {
 	case fit < a.idx:
