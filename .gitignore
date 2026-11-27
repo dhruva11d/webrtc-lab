@@ -5,6 +5,12 @@ notes/
 *.txt
 4k packets.json
 
+# Validation / mistake-tracking tooling (local only)
+quality/
+.githooks/
+.claude/
+CLAUDE.md
+
 # Secrets (TURN credentials, TLS key)
 .env
 turn-lab/ice-servers*.json

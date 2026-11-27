@@ -1,0 +1,113 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Simulcast viewer</title>
+<style>body{font-family:sans-serif;margin:16px}video{width:480px;background:#000;display:block}button.on{font-weight:bold;background:#cde}pre{background:#f4f4f4;padding:8px}</style>
+</head><body>
+<h3>Task 5.5b: choose a layer as a subscriber</h3>
+<p>Tab 1: open <b>simulcast.html</b> and publish. This tab: subscribe, then switch layers.</p>
+<button id="sub">Subscribe</button> <button id="stop">Stop</button>
+<span> Layer: <button class="L" data-l="q">q low</button> <button class="L" data-l="h">h medium</button> <button class="L" data-l="f">f high</button> <button class="L" data-l="auto">auto (loss)</button> <button class="L" data-l="autobwe">auto (bwe)</button></span>
+<span> Impair this subscriber: <button class="I" data-q="cap=800&loss=0">cap 800 kbps</button> <button class="I" data-q="cap=300&loss=0">cap 300 kbps</button> <button class="I" data-q="cap=0&loss=10">10% random loss</button> <button class="I" data-q="cap=0&loss=0">clear</button></span>
+<video id="v" autoplay muted playsinline></video>
+<pre id="stats">-</pre><canvas id="chart" width="900" height="320"></canvas><pre id="log"></pre>
+<script>
+const log = m => { document.getElementById("log").textContent += new Date().toISOString().slice(11,23) + " " + m + "\n"; };
+let pc, timer, chartTimer, subId, wanted = "h";
+const sel = w => w.startsWith("auto") ? `layer=auto&policy=${w === "autobwe" ? "bwe" : "loss"}` : `layer=${w}`;
+const mark = () => document.querySelectorAll("button.L").forEach(b => b.classList.toggle("on", b.dataset.l === wanted));
+mark();
+document.querySelectorAll("button.L").forEach(b => b.onclick = async () => {
+  wanted = b.dataset.l; mark();
+  if (!subId) { log("will start on layer " + wanted); return; }
+  const t0 = performance.now();
+  const r = await fetch(`/simulcast-select?id=${subId}&${sel(wanted)}`, { method: "POST" });
+  log(`asked for ${wanted}: HTTP ${r.status}`);
+  window.switchStart = t0; window.switchTo = wanted;
+});
+document.querySelectorAll("button.I").forEach(b => b.onclick = async () => {
+  if (!subId) { log("subscribe first"); return; }
+  const r = await fetch(`/simulcast-impair?id=${subId}&${b.dataset.q}`, { method: "POST" });
+  log(`impairment ${b.dataset.q}: HTTP ${r.status}`);
+});
+document.getElementById("stop").onclick = () => { clearInterval(timer); clearInterval(chartTimer); if (pc) pc.close(); pc = null; subId = null; log("stopped"); };
+const layerColor = { q: "#e6a700", h: "#2a9d8f", f: "#5b5bd6" };
+async function drawSeries() {
+  if (!subId) return;
+  let pts;
+  try { pts = await (await fetch(`/simulcast-sub-series?id=${subId}`)).json(); } catch (e) { return; }
+  const c = document.getElementById("chart"), g = c.getContext("2d");
+  const W = c.width, H = c.height, L = 52, T = 22, B = 22, R = 10, ymax = 3000;
+  g.clearRect(0, 0, W, H);
+  if (!pts.length) return;
+  const t1 = pts[pts.length - 1].t, t0 = Math.max(0, t1 - 180);
+  const vis = pts.filter(p => p.t >= t0);
+  const x = t => L + (t - t0) / Math.max(1, t1 - t0) * (W - L - R);
+  const y = v => T + (1 - Math.min(v, ymax) / ymax) * (H - T - B);
+  g.font = "11px sans-serif"; g.fillStyle = "#555"; g.strokeStyle = "#ddd";
+  for (let v = 0; v <= ymax; v += 500) { g.beginPath(); g.moveTo(L, y(v)); g.lineTo(W - R, y(v)); g.stroke(); g.fillText(v + "", 6, y(v) + 4); }
+  g.fillText("kbps (clipped at 3000)", L, 12);
+  for (let i = 0; i < vis.length; i++) {
+    const p = vis[i], nx = i + 1 < vis.length ? vis[i + 1].t : p.t + 1;
+    g.fillStyle = layerColor[p.layer] || "#bbb";
+    g.fillRect(x(p.t), H - B + 4, Math.max(1, x(nx) - x(p.t)), 6);
+  }
+  const line = (key, color, dash, skipZero) => {
+    g.strokeStyle = color; g.lineWidth = 2; g.setLineDash(dash); g.beginPath();
+    let pen = false;
+    for (const p of vis) {
+      if (skipZero && !p[key]) { pen = false; continue; }
+      if (!pen) { g.moveTo(x(p.t), y(p[key])); pen = true; } else g.lineTo(x(p.t), y(p[key]));
+    }
+    g.stroke(); g.setLineDash([]);
+  };
+  line("cap", "#d62828", [6, 4], true);
+  line("est", "#1d4ed8", [], false);
+  line("send", "#15803d", [], false);
+  g.fillStyle = "#1d4ed8"; g.fillText("estimate", W - 250, 12);
+  g.fillStyle = "#15803d"; g.fillText("sending", W - 190, 12);
+  g.fillStyle = "#d62828"; g.fillText("cap", W - 130, 12);
+  g.fillStyle = "#555"; g.fillText("layer: q  h  f", W - 90, 12);
+  g.fillStyle = layerColor.q; g.fillRect(W - 66, 4, 8, 8);
+  g.fillStyle = layerColor.h; g.fillRect(W - 50, 4, 8, 8);
+  g.fillStyle = layerColor.f; g.fillRect(W - 34, 4, 8, 8);
+  g.fillStyle = "#555"; g.fillText(`last ${Math.round(t1 - t0)} s, ${vis[vis.length - 1].policy}${vis[vis.length - 1].auto ? " auto" : " manual"}`, L, H - 2);
+}
+document.getElementById("sub").onclick = async () => {
+  if (pc) { log("already subscribed, press Stop first"); return; }
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onconnectionstatechange = () => log("connection: " + pc.connectionState);
+  pc.ontrack = e => { log("got track"); document.getElementById("v").srcObject = e.streams[0] || new MediaStream([e.track]); };
+  pc.addTransceiver("video", { direction: "recvonly" });
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise(r => { if (pc.iceGatheringState === "complete") r(); else pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && r(); });
+  const res = await fetch("/simulcast-sub?layer=" + (wanted.startsWith("auto") ? "h" : wanted), { method: "POST", body: JSON.stringify(pc.localDescription) });
+  if (!res.ok) { log("subscribe failed: " + await res.text()); pc.close(); pc = null; return; }
+  subId = res.headers.get("X-Sub-Id");
+  log("subscribed as " + subId + " on layer " + wanted);
+  if (wanted.startsWith("auto")) await fetch(`/simulcast-select?id=${subId}&${sel(wanted)}`, { method: "POST" });
+  if (res.headers.get("X-Publisher-Live") === "0") log("WARNING: no publisher is live. Press Publish in simulcast.html first, then Stop and Subscribe here again.");
+  await pc.setRemoteDescription(await res.json());
+  chartTimer = setInterval(drawSeries, 2000);
+  let prev = 0, lastW = 0;
+  timer = setInterval(async () => {
+    const out = [];
+    (await pc.getStats()).forEach(s => {
+      if (s.type === "inbound-rtp" && s.kind === "video") {
+        const kbps = prev ? (s.bytesReceived - prev) * 8 / 1000 : 0; prev = s.bytesReceived;
+        out.push(`recv: ${kbps.toFixed(0)} kbps ${s.frameWidth}x${s.frameHeight} fps=${s.framesPerSecond ?? "-"} lost=${s.packetsLost} freezes=${s.freezeCount} pli=${s.pliCount} nack=${s.nackCount}`);
+        if (s.frameWidth !== lastW) {
+          if (lastW) log(`resolution changed ${lastW} -> ${s.frameWidth}` + (window.switchStart ? ` (${Math.round(performance.now() - window.switchStart)} ms after asking for ${window.switchTo})` : ""));
+          lastW = s.frameWidth; window.switchStart = null;
+        }
+      }
+    });
+    if (subId) {
+      try {
+        const st = await (await fetch(`/simulcast-sub-stats?id=${subId}`)).json();
+        out.push(`server estimate: ${st.estimate_kbps.toFixed(0)} kbps (loss-based ${st.loss_based_kbps.toFixed(0)}, delay-based ${st.delay_based_kbps.toFixed(0)}; ${st.usage}/${st.state})`);
+        out.push(`server sending: ${st.send_kbps.toFixed(0)} kbps on layer ${st.layer || "-"} (wants ${st.target}${st.auto ? ", auto/" + st.policy : ""}) dropped=${st.dropped}`);
+      } catch (e) { /* server restarted */ }
+    }
+    document.getElementById("stats").textContent = out.join("\n") || "-";
+  }, 500);
+};
+</script></body></html>

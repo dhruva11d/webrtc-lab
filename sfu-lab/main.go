@@ -186,6 +186,12 @@ func main() {
 	mux.HandleFunc("/publish", publishHandler(api))
 	mux.HandleFunc("/subscribe", subscribeHandler(api))
 	mux.HandleFunc("/ws", wsHandler(api))
+	mux.HandleFunc("/simulcast", simulcastPublishHandler(api))
+	mux.HandleFunc("/simulcast-sub", simSubscribeHandler())
+	mux.HandleFunc("/simulcast-select", simSelectHandler)
+	mux.HandleFunc("/simulcast-impair", simImpairHandler)
+	mux.HandleFunc("/simulcast-sub-stats", simStatsHandler())
+	mux.HandleFunc("/simulcast-sub-series", simSeriesHandler)
 	log.Printf("sfu-lab echo: open http://%s/echo.html", *addr)
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }

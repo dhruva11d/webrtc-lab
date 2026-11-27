@@ -1,0 +1,56 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Simulcast</title>
+<style>body{font-family:sans-serif;margin:16px}video{width:320px;background:#000}pre{background:#f4f4f4;padding:8px}</style>
+</head><body>
+<h3>Task 5.5a: publish 3 layers to the SFU</h3>
+<button id="start">Publish 3 layers</button> <button id="stop">Stop</button>
+<div><video id="v" autoplay muted playsinline></video></div>
+<pre id="stats">-</pre><pre id="log"></pre>
+<script>
+const log = m => { document.getElementById("log").textContent += new Date().toISOString().slice(11,23) + " " + m + "\n"; };
+let pc, timer;
+document.getElementById("stop").onclick = () => { clearInterval(timer); if (pc) pc.close(); pc = null; log("stopped"); };
+document.getElementById("start").onclick = async () => {
+  if (pc) { log("already started, press Stop first"); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+  } catch (e) {
+    log("camera error: " + e.name + " (" + e.message + "). Close other tabs or apps that use the camera, then try again.");
+    return;
+  }
+  document.getElementById("v").srcObject = stream;
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onconnectionstatechange = () => log("connection: " + pc.connectionState);
+  const tr = pc.addTransceiver(stream.getVideoTracks()[0], {
+    direction: "sendonly", streams: [stream],
+    sendEncodings: [
+      { rid: "q", scaleResolutionDownBy: 4, maxBitrate: 150000 },
+      { rid: "h", scaleResolutionDownBy: 2, maxBitrate: 500000 },
+      { rid: "f", maxBitrate: 1500000 },
+    ],
+  });
+  const keep = ["video/vp8", "video/rtx", "video/red", "video/ulpfec"];
+  const codecs = RTCRtpSender.getCapabilities("video").codecs;
+  tr.setCodecPreferences([...codecs.filter(c => c.mimeType.toLowerCase() === "video/vp8"), ...codecs.filter(c => keep.slice(1).includes(c.mimeType.toLowerCase()))]);
+  await pc.setLocalDescription(await pc.createOffer());
+  log("offer has simulcast line: " + /a=simulcast:/.test(pc.localDescription.sdp));
+  await new Promise(r => { if (pc.iceGatheringState === "complete") r(); else pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && r(); });
+  const res = await fetch("/simulcast", { method: "POST", body: JSON.stringify(pc.localDescription) });
+  if (!res.ok) { log("simulcast failed: " + await res.text()); return; }
+  const answer = await res.json();
+  log("answer has simulcast line: " + /a=simulcast:/.test(answer.sdp));
+  await pc.setRemoteDescription(answer);
+  const prev = {};
+  timer = setInterval(async () => {
+    const out = [];
+    (await pc.getStats()).forEach(s => {
+      if (s.type === "outbound-rtp" && s.kind === "video") {
+        const kbps = prev[s.ssrc] ? (s.bytesSent - prev[s.ssrc]) * 8 / 1000 : 0; prev[s.ssrc] = s.bytesSent;
+        out.push(`rid=${s.rid ?? "-"}: ${kbps.toFixed(0)} kbps ${s.frameWidth ?? "-"}x${s.frameHeight ?? "-"} fps=${s.framesPerSecond ?? "-"} keyFrames=${s.keyFramesEncoded ?? "-"} pli=${s.pliCount ?? "-"} nack=${s.nackCount ?? "-"} limit=${s.qualityLimitationReason}`);
+      }
+    });
+    document.getElementById("stats").textContent = out.sort().join("\n") || "-";
+  }, 1000);
+};
+</script></body></html>
